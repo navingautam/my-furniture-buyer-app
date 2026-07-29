@@ -3,8 +3,23 @@
 ## Overview
 ```
 Browser  <-->  Next.js app  <-->  SQLite (local file database)
+                    |
+                    +-->  Furniture shop's catalogue API (live, for browsing)
+                    +-->  Furniture shop's ledger API (live, for balance)
+                    +-->  Furniture shop's orders API (live, for "Buy" — really debits balance)
 ```
-Next.js serves the pages and reads/writes a single local database file (`data/app.db`) to check products, the buyer's budget, and save orders. There is no separate backend server and no cloud account to set up — the database is just a file created automatically the first time the app runs.
+Next.js serves the pages and reads/writes a single local database file (`data/app.db`) for login and (as a best-effort mirror) order history. Some things are deliberately **not** authoritative locally, and instead come live from the shop's own API:
+- the **product listing** (`/catalogue/search-index` — see "Browsing" below)
+- the buyer's **remaining balance** (`/users/{user_id}` — see "Checkout with balance check" below)
+- **"Buy" purchases** (`POST /orders` — see "Buying instantly" below) — this one genuinely debits the real balance, unlike cart checkout
+
+There is no separate backend server and no cloud account to set up for the local database itself — it's just a file created automatically the first time the app runs.
+
+**Important nuance on balance:** the real balance is tied to *one* account on the shop's side (identified by `PARTICIPANT_USER_ID`, resolved once via `POST /claim` with the registered event email) — it is not per-buyer. Every buyer signed up in this app sees the same figure. Two different purchase paths exist with different real-world effect:
+- **"Buy" button** (per product, `app/buy-now-actions.ts`) calls the shop's real `POST /orders` — this genuinely debits the shared balance, and is mirrored into our local `orders` table afterward purely so it shows up in this app's own order history.
+- **Cart checkout** (`/cart`, `app/cart/actions.ts`) only writes to the local `orders` table — it does not call the shop's Orders API, so it does not move the real balance.
+
+`profiles.budget` (a local, per-buyer starting balance) still exists in the schema but is no longer used to compute what's shown or enforced — it's a leftover from before the real balance was wired in.
 
 Login is hand-rolled rather than provided by a third party: passwords are hashed with `bcryptjs`, and once a buyer logs in, their session is stored in an encrypted browser cookie (`iron-session`) — no separate sessions table needed.
 
@@ -53,7 +68,7 @@ classDiagram
 
 There are four things the app needs to remember, matching the four ideas in the requirements (a buyer, a product, an order, and what's inside that order):
 
-- **Profile** — one per buyer. Holds their login email, their password (as a one-way hash, never the plain password), and their budget (a single number that starts at a default and gets reduced as they spend). This is the "who" of the app.
+- **Profile** — one per buyer. Holds their login email and their password (as a one-way hash, never the plain password). This is the "who" of the app. It still has a `budget` column from before the shop's ledger API was wired in, but it's unused now — see the balance note above.
 - **Product** — one per furniture item in the catalogue (name, price, description, category, photo). Loaded in bulk from a MongoDB source catalogue via `scripts/sync-catalog-from-mongo.mjs`, not added by hand.
 - **Order** — created the moment a buyer checks out. It records who placed it, when, and the total amount — but not *what* was in it (that's the next box).
 - **OrderItem** — the line items of an order: which product, how many, and the price it was sold at. Splitting this out from Order means one order can contain many products, and each product can appear in many orders over time.
@@ -116,14 +131,21 @@ Access rule: unlike a hosted database, SQLite has no built-in per-user access ru
 3. On success, the buyer's id is saved into an encrypted session cookie, and they're redirected to `/`.
 
 **Browsing**
-1. `/` loads and reads rows from the local `products` table (first 60, to keep the page light — there are hundreds of products).
-2. Each product renders as a card (image, name, price, description) with an "Add to cart" button.
+1. `/` calls the shop's catalogue API at `/catalogue/search-index` (`lib/catalogue-api.ts`), sending the `API_KEY` from `.env` as an `x-api-key` header. This endpoint is a lightweight listing meant for browsing (no images) — deliberately not the plain `/catalogue` endpoint, which is much slower.
+2. The API response (category, name, price) is joined against our own `products` table by `source_id`/`item_id`, purely to fill in a photo and the internal id "Add to cart" needs — the catalogue API itself has no images.
+3. Each product renders as a card (image if available, category, name, price) with an "Add to cart" button (needs a local match, see above) and a "Buy" button (works for any item — see "Buying instantly" below).
+
+**Buying instantly (real order)**
+1. Clicking "Buy" on a product calls the `buyNow` server action (`app/buy-now-actions.ts`) directly — no cart, no confirmation step first.
+2. That action calls the shop's real `POST /orders` with the item and quantity 1, passing an `Idempotency-Key` so an accidental retry can't double-charge. This actually debits the shared balance.
+3. If the shop's API rejects it (e.g. insufficient balance, a 402 response), the card shows that error inline and nothing is charged.
+4. On success, the card shows an inline confirmation (order id, amount charged, new balance), the purchase is mirrored into the local `orders`/`order_items` tables so it appears on `/orders` too, and the header's balance refreshes to match.
 
 **Checkout with balance check**
 1. Buyer adds products to the cart (kept in the browser via `localStorage`, not the database, until checkout — see `lib/cart-context.tsx`).
-2. `/cart` shows each line item with a quantity stepper, the cart total, and the buyer's remaining balance (`profiles.budget` minus the total of their past orders — see `lib/balance.ts`).
+2. `/cart` shows each line item with a quantity stepper, the cart total, and the remaining balance fetched live from `GET /users/{user_id}` on the shop's API (`lib/ledger-api.ts`) — the same header/account for every buyer (see the balance note above).
 3. If the cart total is more than the remaining balance, a clear message explains by how much, and the checkout button is disabled — the buyer must remove items to proceed.
-4. If within budget, checkout calls the `placeOrder` server action (`app/cart/actions.ts`), which re-checks current prices and the balance itself (never trusting the browser's numbers), then creates one `orders` row and one `order_items` row per line item in a single transaction.
+4. If within budget, checkout calls the `placeOrder` server action (`app/cart/actions.ts`), which re-checks current prices and re-fetches the real balance itself (never trusting the browser's numbers), then creates one `orders` row and one `order_items` row per line item in a single transaction. If the balance API can't be reached, checkout shows a clear error instead of guessing.
 
 ## Folder structure
 ```
@@ -133,19 +155,24 @@ my-furniture-buyer-app/
     login/actions.ts       # server actions: authenticate, logout
     page.tsx                # home page / product catalogue
     cart/page.tsx            # cart page (auth + balance guard, server component)
-    cart/actions.ts           # server action: placeOrder (re-checks balance)
+    cart/actions.ts           # server action: placeOrder (local-only, re-checks balance)
+    buy-now-actions.ts         # server action: buyNow (real order via shop's Orders API)
     layout.tsx
   components/
-    ProductCard.tsx
+    ProductCard.tsx         # "Add to cart" + "Buy" (real order) buttons, confirmation UI
     HeaderAuth.tsx          # login/logout state + remaining balance in the header
     CartLink.tsx              # cart item count link in the header
     CartClient.tsx             # interactive cart list, quantities, checkout
   lib/
     db.ts                    # opens the local SQLite file, applies schema
     session.ts                # reads/writes the encrypted session cookie
-    products.ts                # Product type
-    balance.ts                  # computes a buyer's remaining balance
-    cart-context.tsx              # client-side cart state, backed by localStorage
+    products.ts                # DisplayProduct type (for home page cards)
+    catalogue-api.ts             # fetches live product listing from the shop's API
+    ledger-api.ts                  # fetches the real (live) balance from the shop's API
+    orders-api.ts                    # places a real order via the shop's API (debits balance)
+    env.ts                             # central place environment variables are read from
+    balance.ts                          # local "total spent so far" for the orders page
+    cart-context.tsx                      # client-side cart state, backed by localStorage
   db/
     schema.sql                 # table definitions, applied automatically on startup
   scripts/
@@ -158,6 +185,7 @@ my-furniture-buyer-app/
 ```
 
 ## Environment & deployment
-- `.env.local` (never committed to git) holds `SESSION_SECRET` (encrypts the login cookie) and `MONGODB_URI` (only needed to re-run the catalogue import).
+- `.env` and `.env.local` (never committed to git) hold: `API_KEY` (sent to the catalogue, ledger, and orders APIs), `PARTICIPANT_USER_ID` (whose account the balance and "Buy" purchases apply to — see the balance note above), `SESSION_SECRET` (encrypts the login cookie), and `MONGODB_URI` (only needed to re-run the one-off Mongo import that seeded product photos — see below).
+- The home page depends on the catalogue API being reachable and `API_KEY` being set — without it, the catalogue shows no products. The cart page and checkout similarly depend on the ledger API — if it's unreachable, both show a clear error rather than guessing a balance. Login and order history (local database) are unaffected either way.
 - The database itself needs no configuration — it's a file created on first run.
 - Deployment target: running locally for the Day 1 demo. Deploying to a host like Vercel would need the database moved back to a hosted service (see the trade-off note above), since Vercel doesn't keep local files around between requests.

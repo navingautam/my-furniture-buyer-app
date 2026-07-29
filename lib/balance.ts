@@ -1,5 +1,8 @@
 import db from "@/lib/db";
 
+// Used for the "total spent so far" figure on the order history page — the
+// buyer's actual remaining balance is now sourced live from the shop's API
+// (see lib/ledger-api.ts), not computed from local order totals.
 export function getTotalSpent(profileId: string): number {
   const { spent } = db
     .prepare(
@@ -7,19 +10,4 @@ export function getTotalSpent(profileId: string): number {
     )
     .get(profileId) as { spent: number };
   return spent;
-}
-
-// `profiles.budget` is the starting balance given at signup and never
-// changes. How much a buyer has left is always computed from it minus
-// everything they've ordered so far — nothing to keep in sync by hand.
-export function getRemainingBalance(profileId: string): number {
-  const profile = db
-    .prepare("select budget from profiles where id = ?")
-    .get(profileId) as { budget: number } | undefined;
-
-  if (!profile) {
-    throw new Error(`No profile found for id ${profileId}`);
-  }
-
-  return profile.budget - getTotalSpent(profileId);
 }

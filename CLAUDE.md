@@ -10,7 +10,7 @@ A Day 1 hackathon web app for a furniture shop's buyers. A logged-in user can:
 The owner has no coding background. Claude Code makes all technical decisions (stack, structure, implementation) and does all the building. Explanations should stay in plain English — avoid unexplained jargon.
 
 ## Status
-2026-07-29: Scaffold built. Home page (real product catalogue), login/signup, and the database are working. Switched from Supabase to a local database (see below) at the owner's request.
+2026-07-29: Scaffold built. Home page, login/signup, cart/checkout, and order history are all working. Switched from Supabase to a local database at the owner's request. Product listing and the buyer's balance now both come live from the furniture shop's own training API (Day 1 Participant Guide) rather than being tracked locally — see architecture.md's "Important nuance on balance" note for the trade-off this introduces (one shared balance, not per-buyer). Each product also has a "Buy" button that places a *real* order through the shop's API and genuinely debits that shared balance (unlike cart checkout, which only records locally) — see architecture.md's "Buying instantly" flow.
 
 ## Tech stack
 - **Next.js** — React-based framework that handles both the pages the user sees and the server-side logic (like checking a budget) in one project.

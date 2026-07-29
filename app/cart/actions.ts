@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import db from "@/lib/db";
 import { getSession } from "@/lib/session";
-import { getRemainingBalance } from "@/lib/balance";
+import { fetchRealBalance } from "@/lib/ledger-api";
 
 export type CheckoutLine = { productId: string; quantity: number };
 export type CheckoutResult = { error: string } | { success: true };
@@ -39,7 +39,16 @@ export async function placeOrder(
     total += price * line.quantity;
   }
 
-  const remaining = getRemainingBalance(userId);
+  let remaining: number;
+  try {
+    remaining = await fetchRealBalance();
+  } catch (err) {
+    console.error("Failed to fetch real balance:", err);
+    return {
+      error: "Couldn't check your balance right now — try again in a moment.",
+    };
+  }
+
   if (total > remaining) {
     return {
       error: `This order totals $${total.toLocaleString()}, which is $${(

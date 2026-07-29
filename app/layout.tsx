@@ -3,7 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import "./globals.css";
 import { getSession } from "@/lib/session";
-import { getRemainingBalance } from "@/lib/balance";
+import { fetchRealBalance } from "@/lib/ledger-api";
 import HeaderAuth from "@/components/HeaderAuth";
 import { CartProvider } from "@/lib/cart-context";
 
@@ -29,7 +29,10 @@ export default async function RootLayout({
 }>) {
   const session = await getSession();
   const remainingBalance = session.userId
-    ? getRemainingBalance(session.userId)
+    ? await fetchRealBalance().catch((err) => {
+        console.error("Failed to fetch real balance:", err);
+        return null;
+      })
     : null;
 
   return (
@@ -39,8 +42,11 @@ export default async function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <CartProvider>
-          <header className="border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-            <Link href="/" className="font-semibold">
+          <header className="border-b border-gray-200 bg-white px-6 py-3.5 flex items-center justify-between">
+            <Link
+              href="/"
+              className="font-semibold text-lg tracking-tight text-gray-900"
+            >
               Furniture Buyer
             </Link>
             <HeaderAuth

@@ -8,8 +8,16 @@ export default function CartLink() {
   const count = items.reduce((sum, i) => sum + i.quantity, 0);
 
   return (
-    <Link href="/cart" className="text-sm underline">
-      Cart{count > 0 ? ` (${count})` : ""}
+    <Link
+      href="/cart"
+      className="flex items-center gap-1.5 text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors"
+    >
+      Cart
+      {count > 0 && (
+        <span className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 rounded-full bg-gray-900 text-white text-xs font-semibold">
+          {count}
+        </span>
+      )}
     </Link>
   );
 }
