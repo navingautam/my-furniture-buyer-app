@@ -33,9 +33,9 @@ type OrderResponse = {
 // POST /orders — per the shop's API docs, "this is also the payment -- it
 // debits the balance." Real money-like effect: this actually reduces the
 // balance shown elsewhere in the app, unlike our own local order history.
-export async function placeRealOrder(
-  itemId: string,
-  quantity: number,
+// Supports one or more line items in a single real order/charge.
+export async function placeRealOrderMulti(
+  items: { itemId: string; quantity: number }[],
   idempotencyKey: string
 ): Promise<PlacedOrder> {
   if (!participantUserId) {
@@ -52,7 +52,7 @@ export async function placeRealOrder(
     },
     body: JSON.stringify({
       user_id: participantUserId,
-      items: [{ item_id: itemId, quantity }],
+      items: items.map((i) => ({ item_id: i.itemId, quantity: i.quantity })),
     }),
     cache: "no-store",
   });
@@ -65,10 +65,9 @@ export async function placeRealOrder(
   }
 
   if (res.status === 404) {
-    const body = await res
-      .json()
-      .catch(() => ({ detail: `No product with item_id '${itemId}'` }));
-    throw new ItemNotFoundError(body.detail ?? `No product with item_id '${itemId}'`);
+    const fallback = `No product with item_id '${items.map((i) => i.itemId).join(", ")}'`;
+    const body = await res.json().catch(() => ({ detail: fallback }));
+    throw new ItemNotFoundError(body.detail ?? fallback);
   }
 
   if (!res.ok) {
@@ -91,4 +90,13 @@ export async function placeRealOrder(
       lineTotal: item.line_total,
     })),
   };
+}
+
+// Convenience wrapper for the common single-item case (Buy button, agent).
+export async function placeRealOrder(
+  itemId: string,
+  quantity: number,
+  idempotencyKey: string
+): Promise<PlacedOrder> {
+  return placeRealOrderMulti([{ itemId, quantity }], idempotencyKey);
 }

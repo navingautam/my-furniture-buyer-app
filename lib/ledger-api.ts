@@ -1,11 +1,17 @@
 import { apiKey, participantUserId, SHOP_API_BASE_URL } from "@/lib/env";
 
+export type LedgerUser = {
+  userId: string;
+  name: string;
+  balance: number;
+};
+
 // GET /users/{user_id} — "Account & Balance" in the shop's API. Per its own
 // description, the balance is derived by summing ledger credits/debits on
 // their side; it isn't something we store. This is a single account tied to
 // the API key (see lib/env.ts), so every buyer in this app sees the same
-// figure — it isn't debited by orders placed through our own checkout.
-export async function fetchRealBalance(): Promise<number> {
+// figure — it isn't debited by orders placed through our own local checkout.
+export async function fetchLedgerUser(): Promise<LedgerUser> {
   if (!participantUserId) {
     throw new Error("PARTICIPANT_USER_ID is not set in .env");
   }
@@ -21,6 +27,15 @@ export async function fetchRealBalance(): Promise<number> {
     throw new Error(`Balance request failed: ${res.status} ${res.statusText}`);
   }
 
-  const data = (await res.json()) as { balance: number };
-  return data.balance;
+  const data = (await res.json()) as {
+    user_id: string;
+    name: string;
+    balance: number;
+  };
+
+  return { userId: data.user_id, name: data.name, balance: data.balance };
+}
+
+export async function fetchRealBalance(): Promise<number> {
+  return (await fetchLedgerUser()).balance;
 }

@@ -14,3 +14,11 @@ export const apiKey = process.env.API_KEY;
 // lib/ledger-api.ts). This is a single account tied to the API key above,
 // not one per buyer signed up in this app.
 export const participantUserId = process.env.PARTICIPANT_USER_ID;
+
+// Azure OpenAI (GPT-5 mini) access. Unrelated to the furniture shop's API
+// above — server-only, never expose azureOpenAiApiKey to the browser.
+// Not wired into any feature yet.
+export const azureOpenAiEndpoint = process.env.AZURE_OPENAI_ENDPOINT;
+export const azureOpenAiApiVersion = process.env.AZURE_OPENAI_API_VERSION;
+export const azureOpenAiDeployment = process.env.AZURE_OPENAI_DEPLOYMENT;
+export const azureOpenAiApiKey = process.env.AZURE_OPENAI_API_KEY;

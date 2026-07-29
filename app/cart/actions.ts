@@ -4,7 +4,11 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import db from "@/lib/db";
 import { getSession } from "@/lib/session";
-import { fetchRealBalance } from "@/lib/ledger-api";
+import {
+  placeRealOrderMulti,
+  InsufficientBalanceError,
+  ItemNotFoundError,
+} from "@/lib/orders-api";
 
 export type CheckoutLine = { productId: string; quantity: number };
 export type CheckoutResult = { error: string } | { success: true };
@@ -21,39 +25,46 @@ export async function placeOrder(
     return { error: "Your cart is empty." };
   }
 
-  // Always re-look-up current prices server-side — never trust totals
-  // computed in the browser.
-  const priceRows = db
+  // Cart items are keyed by our local product id — map each to the shop
+  // catalogue's item_id (source_id) so we can place a REAL order that
+  // actually debits the balance, not just a local record.
+  const rows = db
     .prepare(
-      `select id, price from products where id in (${lines.map(() => "?").join(",")})`
+      `select id, source_id from products where id in (${lines.map(() => "?").join(",")})`
     )
-    .all(...lines.map((l) => l.productId)) as { id: string; price: number }[];
-  const priceById = new Map(priceRows.map((row) => [row.id, row.price]));
+    .all(...lines.map((l) => l.productId)) as {
+    id: string;
+    source_id: string | null;
+  }[];
+  const sourceIdByProductId = new Map(rows.map((r) => [r.id, r.source_id]));
 
-  let total = 0;
   for (const line of lines) {
-    const price = priceById.get(line.productId);
-    if (price === undefined) {
+    if (!sourceIdByProductId.get(line.productId)) {
       return { error: "One of the items in your cart no longer exists." };
     }
-    total += price * line.quantity;
   }
 
-  let remaining: number;
+  let order;
   try {
-    remaining = await fetchRealBalance();
+    order = await placeRealOrderMulti(
+      lines.map((line) => ({
+        itemId: sourceIdByProductId.get(line.productId)!,
+        quantity: line.quantity,
+      })),
+      randomUUID()
+    );
   } catch (err) {
-    console.error("Failed to fetch real balance:", err);
+    if (err instanceof InsufficientBalanceError) {
+      return {
+        error: `Insufficient balance to complete this purchase (${err.message}).`,
+      };
+    }
+    if (err instanceof ItemNotFoundError) {
+      return { error: "One of the items in your cart no longer exists." };
+    }
+    console.error("Failed to place real order:", err);
     return {
-      error: "Couldn't check your balance right now — try again in a moment.",
-    };
-  }
-
-  if (total > remaining) {
-    return {
-      error: `This order totals $${total.toLocaleString()}, which is $${(
-        total - remaining
-      ).toLocaleString()} more than your $${remaining.toLocaleString()} remaining balance. Remove some items to continue.`,
+      error: "Couldn't place the order right now — try again in a moment.",
     };
   }
 
@@ -66,14 +77,15 @@ export async function placeOrder(
   );
 
   const placeOrderTransaction = db.transaction(() => {
-    insertOrder.run(orderId, userId, total);
+    insertOrder.run(orderId, userId, order.totalPrice);
     for (const line of lines) {
       insertItem.run(
         randomUUID(),
         orderId,
         line.productId,
         line.quantity,
-        priceById.get(line.productId)
+        order.items.find((i) => i.itemId === sourceIdByProductId.get(line.productId))
+          ?.unitPrice ?? 0
       );
     }
   });
@@ -83,6 +95,7 @@ export async function placeOrder(
   // Next's client-side router cache can keep showing the pre-order figure
   // for a while after redirecting.
   revalidatePath("/", "layout");
+  revalidatePath("/orders");
 
   return { success: true };
 }

@@ -33,6 +33,9 @@ export default function HeaderAuth({
         <Link href="/orders" className={navLinkClass}>
           Orders
         </Link>
+        <Link href="/agent" className={navLinkClass}>
+          Agent
+        </Link>
       </nav>
 
       <div className="flex items-center gap-3 pl-5 border-l border-gray-200">

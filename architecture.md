@@ -122,6 +122,8 @@ Access rule: unlike a hosted database, SQLite has no built-in per-user access ru
 | `/` | product catalogue (redirects here to `/login` if not logged in) | built |
 | `/cart` | current cart, running total vs. remaining balance, checkout | built |
 | `/orders` | past orders for the logged-in buyer, plus total spent | built |
+| `/product/[itemId]` | full detail + picture for one product | built |
+| `/agent` | plain-English shopping assistant (chat) | built |
 
 ## Key flows
 
@@ -133,7 +135,13 @@ Access rule: unlike a hosted database, SQLite has no built-in per-user access ru
 **Browsing**
 1. `/` calls the shop's catalogue API at `/catalogue/search-index` (`lib/catalogue-api.ts`), sending the `API_KEY` from `.env` as an `x-api-key` header. This endpoint is a lightweight listing meant for browsing (no images) — deliberately not the plain `/catalogue` endpoint, which is much slower.
 2. The API response (category, name, price) is joined against our own `products` table by `source_id`/`item_id`, purely to fill in a photo and the internal id "Add to cart" needs — the catalogue API itself has no images.
-3. Each product renders as a card (image if available, category, name, price) with an "Add to cart" button (needs a local match, see above) and a "Buy" button (works for any item — see "Buying instantly" below).
+3. Each product renders as a card (image if available, category, name, price) with an "Add to cart" button (needs a local match, see above) and a "Buy" button (works for any item — see "Buying instantly" below). The image and name both link to `/product/[itemId]` for the full detail view.
+
+**Product detail**
+1. `/product/[itemId]` calls `GET /catalogue/{item_id}` (`lib/catalogue-api.ts`) for full detail — category, name, price, dimensions, colours, and a link to the original IKEA listing.
+2. The picture comes from `GET /catalogue/{item_id}/image` (linked directly as the `<img src>` — it returns raw image bytes, so there's no need to fetch/embed base64 JSON for this page). Neither endpoint needs the API key.
+3. If the item doesn't exist (a 404 from the shop's API), the page shows a friendly "This item is no longer available" message instead of crashing; any other API failure shows a generic retry message.
+4. The same "Add to cart" / "Buy" actions as the catalogue cards appear here too (`components/ProductActions.tsx`, shared by both).
 
 **Buying instantly (real order)**
 1. Clicking "Buy" on a product calls the `buyNow` server action (`app/buy-now-actions.ts`) directly — no cart, no confirmation step first.
@@ -154,25 +162,33 @@ my-furniture-buyer-app/
     login/page.tsx        # login/signup form
     login/actions.ts       # server actions: authenticate, logout
     page.tsx                # home page / product catalogue
+    product/[itemId]/page.tsx # product detail page (full info + picture)
     cart/page.tsx            # cart page (auth + balance guard, server component)
     cart/actions.ts           # server action: placeOrder (local-only, re-checks balance)
-    buy-now-actions.ts         # server action: buyNow (real order via shop's Orders API)
+    buy-now-actions.ts         # server action: buyNow (real order via shop's Orders API, quantity-aware)
+    agent/page.tsx              # shopping assistant chat page
+    agent/actions.ts              # server action: sendAgentMessage (runs one agent turn)
     layout.tsx
   components/
-    ProductCard.tsx         # "Add to cart" + "Buy" (real order) buttons, confirmation UI
+    ProductCard.tsx         # grid card: image/name link to detail page + ProductActions
+    ProductActions.tsx       # shared "Add to cart" + "Buy" buttons, confirmation UI
     HeaderAuth.tsx          # login/logout state + remaining balance in the header
     CartLink.tsx              # cart item count link in the header
     CartClient.tsx             # interactive cart list, quantities, checkout
+    AgentChat.tsx               # chat UI: message list, tool-call trace, purchase-proposal card
   lib/
     db.ts                    # opens the local SQLite file, applies schema
     session.ts                # reads/writes the encrypted session cookie
     products.ts                # DisplayProduct type (for home page cards)
-    catalogue-api.ts             # fetches live product listing from the shop's API
+    catalogue-api.ts             # live product listing + single-product detail/image from the shop's API
     ledger-api.ts                  # fetches the real (live) balance from the shop's API
     orders-api.ts                    # places a real order via the shop's API (debits balance)
-    env.ts                             # central place environment variables are read from
-    balance.ts                          # local "total spent so far" for the orders page
-    cart-context.tsx                      # client-side cart state, backed by localStorage
+    agent-tools.ts                     # search_catalogue/get_product/check_balance/place_order + propose_purchase
+    agent.ts                            # runAgentTurn: the Azure OpenAI tool-calling loop
+    azure-openai-client.ts                # builds the Azure OpenAI SDK client from env
+    env.ts                                  # central place environment variables are read from
+    balance.ts                                # local "total spent so far" for the orders page
+    cart-context.tsx                            # client-side cart state, backed by localStorage
   db/
     schema.sql                 # table definitions, applied automatically on startup
   scripts/
@@ -183,6 +199,16 @@ my-furniture-buyer-app/
   architecture.md
   CLAUDE.md
 ```
+
+## AI agent tools + shopping assistant chat
+`lib/agent-tools.ts` defines the four tools — `search_catalogue`, `get_product`, `check_balance`, `place_order` — as reusable building blocks (`{ name, description, parameters (JSON Schema), execute() }`), decoupled from this app's own login session or local database. `/agent` is a chat UI that puts an actual LLM (Azure OpenAI, GPT-5 mini) behind them.
+
+Worth knowing:
+- **`search_catalogue` compensates for a real API gap.** The shop's actual `/catalogue/search-index` only supports an exact (case-insensitive) category match — no free-text, price, or colour filtering. This tool fetches the full 762-item catalogue in one call and does the keyword/price-range/colour filtering itself, client-side, via plain substring matching. It is **not** semantic search — "cozy" won't match anything unless that literal word appears in a name/category/colour field. Results are capped (default 20, max 50) so the model doesn't get flooded with matches. For genuinely subjective criteria the tool can't encode at all (e.g. "cheap"), the agent's system prompt instructs it to fetch on the concrete parts of the request and apply its own judgment over the plain prices/names/colours it gets back, rather than expecting a filter for it to exist.
+- **`get_product` deliberately excludes image data.** The shop's own docs assume this pattern: strip images from what the LLM sees, and fetch a photo (if a UI needs to *display* one) from a separate URL keyed by the same `item_id`, exactly like `lib/catalogue-api.ts`'s `productImageUrl()` already does for the product detail page.
+- **The chat agent is never given the real `place_order` tool.** `place_order` (in `lib/agent-tools.ts`) is real and irreversible — same caveat as the "Buy" button. Rather than trust prompt instructions alone to stop the model from firing it, `/agent`'s tool list (`chatAgentTools` in `lib/agent-tools.ts`) swaps it for **`propose_purchase`** — a no-op tool that only echoes back a structured `{itemId, name, quantity, unitPrice, totalPrice}` proposal and cannot touch the real API. The chat UI renders that as a distinct card with real "Confirm & buy" / "Cancel" buttons; only clicking "Confirm & buy" calls the real `buyNow` server action (`app/buy-now-actions.ts`, the same one behind the catalogue's "Buy" button), passing the exact item/quantity/price from the proposal — never re-interpreted by the model. This is a hard technical gate, not just an instruction: the model has no code path to actually spend money on its own.
+- **`lib/agent.ts`** runs the tool-calling loop (`runAgentTurn`): send the conversation + tool schemas to Azure OpenAI, execute any tool calls the model requests, feed results back, repeat (capped at 5 rounds) until it returns plain text. The full conversation (including intermediate tool calls/results) is round-tripped through the client on each turn via a server action (`app/agent/actions.ts`) rather than stored server-side — there's no chat-history table.
+- After a purchase is confirmed via the button, a synthetic note is appended to the conversation history (e.g. "I confirmed the proposed purchase... $X charged, new balance $Y") so later turns in the same chat have accurate context — the model itself never sees or triggers the purchase, so without this it would have no way to know it happened.
 
 ## Environment & deployment
 - `.env` and `.env.local` (never committed to git) hold: `API_KEY` (sent to the catalogue, ledger, and orders APIs), `PARTICIPANT_USER_ID` (whose account the balance and "Buy" purchases apply to — see the balance note above), `SESSION_SECRET` (encrypts the login cookie), and `MONGODB_URI` (only needed to re-run the one-off Mongo import that seeded product photos — see below).

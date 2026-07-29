@@ -21,7 +21,8 @@ export type BuyNowResult =
 
 export async function buyNow(
   itemId: string,
-  unitPrice: number
+  unitPrice: number,
+  quantity: number = 1
 ): Promise<BuyNowResult> {
   const session = await getSession();
   if (!session.userId) {
@@ -30,7 +31,7 @@ export async function buyNow(
 
   let order;
   try {
-    order = await placeRealOrder(itemId, 1, randomUUID());
+    order = await placeRealOrder(itemId, quantity, randomUUID());
   } catch (err) {
     if (err instanceof InsufficientBalanceError) {
       return {
@@ -62,7 +63,7 @@ export async function buyNow(
       ).run(localOrderId, session.userId, order.totalPrice);
       db.prepare(
         "insert into order_items (id, order_id, product_id, quantity, price_at_purchase) values (?, ?, ?, ?, ?)"
-      ).run(randomUUID(), localOrderId, localProduct.id, 1, unitPrice);
+      ).run(randomUUID(), localOrderId, localProduct.id, quantity, unitPrice);
     }
   } catch (err) {
     console.error("Failed to mirror real order into local history:", err);
