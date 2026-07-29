@@ -9,33 +9,30 @@
 // app's proposal, following the same snake_case verb_noun convention.
 
 import { randomUUID } from "node:crypto";
-import {
-  fetchCatalogueProducts,
-  fetchProductDetail,
-  ProductNotFoundError,
-} from "@/lib/catalogue-api";
+import { fetchProductDetail, ProductNotFoundError } from "@/lib/catalogue-api";
 import { fetchLedgerUser } from "@/lib/ledger-api";
 import {
   placeRealOrder,
   InsufficientBalanceError,
   ItemNotFoundError,
 } from "@/lib/orders-api";
-
-// A result cap protects two things at once: the agent's context window, and
-// (for search_catalogue) how much of the 762-item catalogue we bother
-// matching in memory per call — trivial at this size, but worth a ceiling.
-const MAX_RESULTS = 50;
-const DEFAULT_RESULTS = 20;
+import { searchLocalCatalogue } from "@/lib/catalogue-rag";
 
 // ---------------------------------------------------------------------------
-// 1. search_catalogue
+// 1. search_catalogue — searches a local, offline copy of the catalogue
+// (see lib/catalogue-rag.ts) rather than calling the shop API live. Same
+// 762-item dataset, much faster (no 3-8s round trip), and adds dimension
+// filters the live API's search-index never exposed — but it has no colour
+// field, since that data isn't in this local copy.
 
 export type SearchCatalogueArgs = {
   category?: string;
   keyword?: string;
   minPrice?: number;
   maxPrice?: number;
-  colour?: string;
+  maxWidth?: number;
+  maxHeight?: number;
+  maxDepth?: number;
   limit?: number;
 };
 
@@ -44,7 +41,9 @@ export type SearchCatalogueItem = {
   name: string;
   price: number;
   category: string | null;
-  colours: string[] | null;
+  width: number | null;
+  height: number | null;
+  depth: number | null;
 };
 
 export type SearchCatalogueResult = {
@@ -56,7 +55,7 @@ export type SearchCatalogueResult = {
 export const searchCatalogueTool = {
   name: "search_catalogue",
   description:
-    "Lists furniture products, with optional filters for category, keyword, price range, and colour. Filtering works by fetching the full catalogue and matching case-insensitive substrings locally — it is not a real search engine: it won't understand synonyms, typos, or style/'vibe' descriptions (e.g. 'cozy'), only literal substrings actually present in the product name, category, or colour fields.",
+    "Lists furniture products from our local copy of the catalogue, with optional filters for category, keyword, price range, and maximum width/height/depth (cm). Filtering matches case-insensitive substrings locally — it is not a real search engine: it won't understand synonyms, typos, or style/'vibe' descriptions (e.g. 'cozy'), only literal substrings actually present in the product name or category. It does NOT have colour data — never claim a colour filter worked, and if the user needs a specific colour, say you can't filter by colour and suggest they check a product's photo/detail page instead.",
   parameters: {
     type: "object",
     properties: {
@@ -72,58 +71,17 @@ export const searchCatalogueTool = {
       },
       minPrice: { type: "number", description: "Minimum price, inclusive." },
       maxPrice: { type: "number", description: "Maximum price, inclusive." },
-      colour: {
-        type: "string",
-        description:
-          "Substring to match against the product's listed colours (case-insensitive), e.g. 'black'.",
-      },
+      maxWidth: { type: "number", description: "Maximum width, cm." },
+      maxHeight: { type: "number", description: "Maximum height, cm." },
+      maxDepth: { type: "number", description: "Maximum depth, cm." },
       limit: {
         type: "integer",
-        description: `Max results to return (default ${DEFAULT_RESULTS}, capped at ${MAX_RESULTS}).`,
+        description: "Max results to return (default 20, capped at 50).",
       },
     },
   },
   async execute(args: SearchCatalogueArgs): Promise<SearchCatalogueResult> {
-    const all = await fetchCatalogueProducts();
-
-    const category = args.category?.toLowerCase();
-    const keyword = args.keyword?.toLowerCase();
-    const colour = args.colour?.toLowerCase();
-
-    const filtered = all.filter((item) => {
-      if (category && !item.category?.toLowerCase().includes(category)) {
-        return false;
-      }
-      if (keyword) {
-        const haystack = `${item.name} ${item.category ?? ""}`.toLowerCase();
-        if (!haystack.includes(keyword)) return false;
-      }
-      if (args.minPrice !== undefined && item.price < args.minPrice) {
-        return false;
-      }
-      if (args.maxPrice !== undefined && item.price > args.maxPrice) {
-        return false;
-      }
-      if (colour && !item.colours?.some((c) => c.toLowerCase().includes(colour))) {
-        return false;
-      }
-      return true;
-    });
-
-    const limit = Math.min(args.limit ?? DEFAULT_RESULTS, MAX_RESULTS);
-    const results = filtered.slice(0, limit).map((item) => ({
-      itemId: item.itemId,
-      name: item.name,
-      price: item.price,
-      category: item.category,
-      colours: item.colours,
-    }));
-
-    return {
-      results,
-      totalMatches: filtered.length,
-      truncated: filtered.length > results.length,
-    };
+    return searchLocalCatalogue(args);
   },
 };
 

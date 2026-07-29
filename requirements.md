@@ -33,6 +33,7 @@ A single-role web app for a furniture shop's buyers: log in, browse a catalogue,
 
 ### FR6 — Shopping assistant (Agent)
 - Buyer can type a plain-English request to an AI assistant (search, product lookup, balance check).
+- Search runs against a local offline copy of the catalogue (762 products, backfilled from the shop's full catalogue export) rather than the live API — faster, and supports filtering by category, keyword, price range, and max width/height/depth. It does not have colour data locally; the assistant says so plainly and, if asked about colour, looks up a specific item's real colours instead of guessing.
 - Search results are shown as product cards (image, item id, name, price) like the catalogue page, just smaller. Each card has a "Buy" button that sends a chat message naming that item id — it does not purchase directly; it still goes through the normal agent turn and the propose/confirm flow.
 - The assistant never places a real order itself — it proposes a specific item + price and waits for the buyer to explicitly confirm via a button before any purchase happens.
 - If a confirmed purchase fails (insufficient balance or item no longer available), the assistant explains why in plain language and suggests an alternative — it never shows a raw error message.

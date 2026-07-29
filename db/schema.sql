@@ -25,6 +25,11 @@ create table if not exists products (
   -- id of the item in an external catalogue (e.g. the Mongo import), so
   -- re-running the sync updates existing rows instead of duplicating them.
   source_id text unique,
+  -- Dimensions (cm), backfilled from the full catalogue export for local
+  -- RAG-style search (see lib/catalogue-rag.ts) — null where not listed.
+  width numeric,
+  height numeric,
+  depth numeric,
   created_at text not null default (datetime('now'))
 );
 
