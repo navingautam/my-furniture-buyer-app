@@ -32,7 +32,11 @@ create table if not exists orders (
   id text primary key,
   profile_id text not null references profiles (id) on delete cascade,
   total numeric not null,
-  created_at text not null default (datetime('now'))
+  created_at text not null default (datetime('now')),
+  -- The shop API's own order_id (from POST /orders) — needed to fetch that
+  -- order's invoice PDF. Null for older local-only orders placed before
+  -- checkout called the real API.
+  shop_order_id text
 );
 
 create table if not exists order_items (

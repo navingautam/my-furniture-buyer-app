@@ -5,8 +5,26 @@ import { useRouter } from "next/navigation";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { sendAgentMessage } from "@/app/agent/actions";
 import { buyNow } from "@/app/buy-now-actions";
-import type { ProposePurchaseResult } from "@/lib/agent-tools";
+import type { ProposePurchaseResult, SearchCatalogueItem } from "@/lib/agent-tools";
 import type { ToolCallLogEntry } from "@/lib/agent";
+import AgentProductGrid from "@/components/AgentProductGrid";
+
+// Pulls product results out of any search_catalogue calls in a turn's tool
+// log, so they can be shown as visual cards instead of raw JSON.
+function extractSearchResults(toolLog: ToolCallLogEntry[]): SearchCatalogueItem[] {
+  const seen = new Set<string>();
+  const items: SearchCatalogueItem[] = [];
+  for (const entry of toolLog) {
+    if (entry.name !== "search_catalogue") continue;
+    const result = entry.result as { results?: SearchCatalogueItem[] } | undefined;
+    for (const item of result?.results ?? []) {
+      if (seen.has(item.itemId)) continue;
+      seen.add(item.itemId);
+      items.push(item);
+    }
+  }
+  return items;
+}
 
 type BuyOutcome =
   | { status: "confirming" }
@@ -35,11 +53,11 @@ export default function AgentChat() {
   const [input, setInput] = useState("");
   const [isSending, startTransition] = useTransition();
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const text = input.trim();
-    if (!text) return;
-    setInput("");
+  // Shared by the text form and the product cards' "Buy" button — both are
+  // just ordinary chat messages, so both go through the same agent turn
+  // (get_product/propose_purchase), never bypassing it.
+  function submitMessage(text: string) {
+    if (!text || isSending) return;
     setMessages((prev) => [...prev, { id: newId(), role: "user", text }]);
 
     startTransition(async () => {
@@ -64,6 +82,18 @@ export default function AgentChat() {
         },
       ]);
     });
+  }
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const text = input.trim();
+    if (!text) return;
+    setInput("");
+    submitMessage(text);
+  }
+
+  function handleBuyClick(item: SearchCatalogueItem) {
+    submitMessage(`Buy item ${item.itemId} (${item.name}).`);
   }
 
   function handleConfirmPurchase(messageId: string, proposal: ProposePurchaseResult) {
@@ -187,11 +217,20 @@ export default function AgentChat() {
               </p>
             );
           }
+          const searchResults = extractSearchResults(message.toolLog);
           return (
             <div key={message.id} className="flex flex-col gap-2 max-w-[85%]">
               <div className="bg-gray-100 rounded-lg px-3 py-2 text-sm whitespace-pre-wrap">
                 {message.text}
               </div>
+
+              {searchResults.length > 0 && (
+                <AgentProductGrid
+                  items={searchResults}
+                  onBuyClick={handleBuyClick}
+                  disabled={isSending}
+                />
+              )}
 
               {message.toolLog.length > 0 && (
                 <details className="text-xs text-gray-400">
@@ -246,7 +285,10 @@ export default function AgentChat() {
                     <p className="text-green-700 bg-green-50 border border-green-200 rounded px-2 py-1.5">
                       Order placed (#{message.buyOutcome.orderId.slice(0, 8)}) — $
                       {message.buyOutcome.totalPrice.toLocaleString()} charged. New
-                      balance: ${message.buyOutcome.remainingBalance.toLocaleString()}.
+                      balance: ${message.buyOutcome.remainingBalance.toLocaleString()}.{" "}
+                      <a href={`/invoices/${message.buyOutcome.orderId}`} className="underline">
+                        Download invoice
+                      </a>
                     </p>
                   )}
                 </div>

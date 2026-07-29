@@ -1,6 +1,7 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
-import { getOrdersForProfile } from "@/lib/orders";
+import { getOrdersForProfile, reconcileMissingShopOrderIds } from "@/lib/orders";
 import { getTotalSpent } from "@/lib/balance";
 
 // SQLite's datetime('now') returns "YYYY-MM-DD HH:MM:SS" (UTC, no timezone
@@ -15,6 +16,7 @@ export default async function OrdersPage() {
     redirect("/login");
   }
 
+  await reconcileMissingShopOrderIds();
   const orders = getOrdersForProfile(session.userId);
   const totalSpent = getTotalSpent(session.userId);
 
@@ -47,25 +49,49 @@ export default async function OrdersPage() {
               </span>
             </div>
             <div className="flex flex-col gap-2">
-              {order.items.map((item) => (
-                <div
-                  key={item.productId}
-                  className="flex items-center gap-3 text-sm"
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={item.imageUrl ?? undefined}
-                    alt={item.name}
-                    className="w-10 h-10 object-cover rounded bg-gray-100"
-                  />
-                  <span className="flex-1">{item.name}</span>
-                  <span className="text-gray-500">x{item.quantity}</span>
-                  <span className="w-16 text-right">
-                    ${(item.priceAtPurchase * item.quantity).toLocaleString()}
-                  </span>
-                </div>
-              ))}
+              {order.items.map((item) => {
+                const content = (
+                  <>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={item.imageUrl ?? undefined}
+                      alt={item.name}
+                      className="w-10 h-10 object-cover rounded bg-gray-100"
+                    />
+                    <span className="flex-1">{item.name}</span>
+                    <span className="text-gray-500">x{item.quantity}</span>
+                    <span className="w-16 text-right">
+                      ${(item.priceAtPurchase * item.quantity).toLocaleString()}
+                    </span>
+                  </>
+                );
+                return item.itemId ? (
+                  <Link
+                    key={item.productId}
+                    href={`/product/${item.itemId}`}
+                    className="flex items-center gap-3 text-sm hover:bg-gray-50 rounded px-1 -mx-1"
+                  >
+                    {content}
+                  </Link>
+                ) : (
+                  <div key={item.productId} className="flex items-center gap-3 text-sm">
+                    {content}
+                  </div>
+                );
+              })}
             </div>
+            {order.shopOrderId ? (
+              <a
+                href={`/invoices/${order.shopOrderId}`}
+                className="text-sm underline text-gray-500 mt-3 inline-block"
+              >
+                Download invoice
+              </a>
+            ) : (
+              <p className="text-sm text-gray-400 mt-3">
+                Invoice not available for this order.
+              </p>
+            )}
           </div>
         ))}
       </div>

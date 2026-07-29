@@ -59,8 +59,8 @@ export async function buyNow(
     if (localProduct) {
       const localOrderId = randomUUID();
       db.prepare(
-        "insert into orders (id, profile_id, total) values (?, ?, ?)"
-      ).run(localOrderId, session.userId, order.totalPrice);
+        "insert into orders (id, profile_id, total, shop_order_id) values (?, ?, ?, ?)"
+      ).run(localOrderId, session.userId, order.totalPrice, order.orderId);
       db.prepare(
         "insert into order_items (id, order_id, product_id, quantity, price_at_purchase) values (?, ?, ?, ?, ?)"
       ).run(randomUUID(), localOrderId, localProduct.id, quantity, unitPrice);

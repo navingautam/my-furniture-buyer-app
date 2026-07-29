@@ -11,7 +11,7 @@ import {
 } from "@/lib/orders-api";
 
 export type CheckoutLine = { productId: string; quantity: number };
-export type CheckoutResult = { error: string } | { success: true };
+export type CheckoutResult = { error: string } | { success: true; orderId: string };
 
 export async function placeOrder(
   lines: CheckoutLine[]
@@ -70,14 +70,14 @@ export async function placeOrder(
 
   const orderId = randomUUID();
   const insertOrder = db.prepare(
-    "insert into orders (id, profile_id, total) values (?, ?, ?)"
+    "insert into orders (id, profile_id, total, shop_order_id) values (?, ?, ?, ?)"
   );
   const insertItem = db.prepare(
     "insert into order_items (id, order_id, product_id, quantity, price_at_purchase) values (?, ?, ?, ?, ?)"
   );
 
   const placeOrderTransaction = db.transaction(() => {
-    insertOrder.run(orderId, userId, order.totalPrice);
+    insertOrder.run(orderId, userId, order.totalPrice, order.orderId);
     for (const line of lines) {
       insertItem.run(
         randomUUID(),
@@ -97,5 +97,5 @@ export async function placeOrder(
   revalidatePath("/", "layout");
   revalidatePath("/orders");
 
-  return { success: true };
+  return { success: true, orderId: order.orderId };
 }

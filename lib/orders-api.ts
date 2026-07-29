@@ -3,6 +3,41 @@ import { apiKey, participantUserId, SHOP_API_BASE_URL } from "@/lib/env";
 export class InsufficientBalanceError extends Error {}
 export class ItemNotFoundError extends Error {}
 
+export type ShopOrderRecord = {
+  orderId: string;
+  totalAmount: number;
+  timestamp: string | null;
+};
+
+// GET /orders/{user_id} — the shop's own order history for the shared
+// account. Used to backfill orders.shop_order_id on local rows that were
+// placed before that column existed (see lib/orders.ts).
+export async function fetchOrderHistory(): Promise<ShopOrderRecord[]> {
+  if (!participantUserId) {
+    throw new Error("PARTICIPANT_USER_ID is not set in .env");
+  }
+  const res = await fetch(
+    new URL(`/orders/${participantUserId}`, SHOP_API_BASE_URL),
+    {
+      headers: apiKey ? { "x-api-key": apiKey } : undefined,
+      cache: "no-store",
+    }
+  );
+  if (!res.ok) {
+    throw new Error(`Order history request failed: ${res.status} ${res.statusText}`);
+  }
+  const data = (await res.json()) as {
+    order_id: string;
+    total_amount: number;
+    timestamp: string | null;
+  }[];
+  return data.map((r) => ({
+    orderId: r.order_id,
+    totalAmount: r.total_amount,
+    timestamp: r.timestamp,
+  }));
+}
+
 export type PlacedOrderLine = {
   itemId: string;
   quantity: number;

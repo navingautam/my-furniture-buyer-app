@@ -98,7 +98,10 @@ export default function ProductActions({
         <p className="text-xs text-green-700 bg-green-50 border border-green-200 rounded px-2 py-1.5 mt-2">
           Order placed (#{buyResult.orderId.slice(0, 8)}) — $
           {buyResult.totalPrice.toLocaleString()} charged. New balance: $
-          {buyResult.remainingBalance.toLocaleString()}.
+          {buyResult.remainingBalance.toLocaleString()}.{" "}
+          <a href={`/invoices/${buyResult.orderId}`} className="underline">
+            Download invoice
+          </a>
         </p>
       )}
       {buyResult?.status === "error" && (

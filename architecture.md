@@ -124,6 +124,7 @@ Access rule: unlike a hosted database, SQLite has no built-in per-user access ru
 | `/orders` | past orders for the logged-in buyer, plus total spent | built |
 | `/product/[itemId]` | full detail + picture for one product | built |
 | `/agent` | plain-English shopping assistant (chat) | built |
+| `/invoices/[shopOrderId]` | proxies the real invoice PDF (route handler, not a page) | built |
 
 ## Key flows
 
@@ -210,8 +211,11 @@ Worth knowing:
 - **`lib/agent.ts`** runs the tool-calling loop (`runAgentTurn`): send the conversation + tool schemas to Azure OpenAI, execute any tool calls the model requests, feed results back, repeat (capped at 5 rounds) until it returns plain text. The full conversation (including intermediate tool calls/results) is round-tripped through the client on each turn via a server action (`app/agent/actions.ts`) rather than stored server-side — there's no chat-history table.
 - After a purchase is confirmed via the button, a synthetic note is appended to the conversation history (e.g. "I confirmed the proposed purchase... $X charged, new balance $Y") so later turns in the same chat have accurate context — the model itself never sees or triggers the purchase, so without this it would have no way to know it happened.
 
+## Invoices
+The shop API generates a real PDF invoice at order-placement time and serves it via `GET /orders/{order_id}/invoice` (requires `API_KEY`). Since a browser `<a>` can't attach that header, `app/invoices/[shopOrderId]/route.ts` proxies it: checks the requester actually owns a local order with that `shop_order_id` (column on `orders`, populated by both `buyNow` and cart checkout since both now place real orders), then streams the PDF through with `Content-Disposition: attachment`. Linked from `/orders` (each order item there also links to its product detail page) and from each purchase-confirmation UI (Buy button, cart checkout, agent chat).
+
 ## Environment & deployment
-- `.env` and `.env.local` (never committed to git) hold: `API_KEY` (sent to the catalogue, ledger, and orders APIs), `PARTICIPANT_USER_ID` (whose account the balance and "Buy" purchases apply to — see the balance note above), `SESSION_SECRET` (encrypts the login cookie), and `MONGODB_URI` (only needed to re-run the one-off Mongo import that seeded product photos — see below).
+- `.env` and `.env.local` (never committed to git) hold: `API_KEY` (sent to the catalogue, ledger, orders, and invoice APIs), `PARTICIPANT_USER_ID` (whose account the balance and "Buy" purchases apply to — see the balance note above), `SESSION_SECRET` (encrypts the login cookie), and `MONGODB_URI` (only needed to re-run the one-off Mongo import that seeded product photos — see below).
 - The home page depends on the catalogue API being reachable and `API_KEY` being set — without it, the catalogue shows no products. The cart page and checkout similarly depend on the ledger API — if it's unreachable, both show a clear error rather than guessing a balance. Login and order history (local database) are unaffected either way.
 - The database itself needs no configuration — it's a file created on first run.
 - Deployment target: running locally for the Day 1 demo. Deploying to a host like Vercel would need the database moved back to a hosted service (see the trade-off note above), since Vercel doesn't keep local files around between requests.

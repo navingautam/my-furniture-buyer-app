@@ -22,4 +22,16 @@ function createConnection() {
 const db = globalThis.__db ?? createConnection();
 if (process.env.NODE_ENV !== "production") globalThis.__db = db;
 
+// Runs on every module load, even against a cached connection — a cached
+// `db` was opened before this column existed in schema.sql, and
+// `create table if not exists` never retroactively adds columns to an
+// already-existing table. If this still errors after saving, restart the
+// dev server (module caching aside, the process itself needs to pick this up).
+const orderColumns = db.prepare("pragma table_info(orders)").all() as {
+  name: string;
+}[];
+if (!orderColumns.some((c) => c.name === "shop_order_id")) {
+  db.exec("alter table orders add column shop_order_id text");
+}
+
 export default db;
